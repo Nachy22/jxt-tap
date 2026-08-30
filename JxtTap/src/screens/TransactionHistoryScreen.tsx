@@ -1,18 +1,20 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
 import { colors } from '../theme/colors';
+import {
+  getDriverSummary,
+  getDriverTransactions,
+  FareTransaction,
+} from '../services/ApiService';
 
-// Mock data for now — will be replaced with real API data in Step 12
-const dailyTotal = {
-  amount: 82.0,
-  trips: 8,
-};
+const driverId = 1; // matches the seeded test driver
 
 const today = new Date().toLocaleDateString('en-GB', {
   weekday: 'long',
@@ -21,17 +23,30 @@ const today = new Date().toLocaleDateString('en-GB', {
   year: 'numeric',
 });
 
-const transactions = [
-  { id: '4821', time: '14:32', route: 'Town → Megenagna', fare: 8 },
-  { id: '2934', time: '14:18', route: 'Town → Megenagna', fare: 8 },
-  { id: '7761', time: '13:55', route: 'Megenagna → CMC', fare: 10 },
-  { id: '0192', time: '13:41', route: 'Town → CMC', fare: 15 },
-  { id: '3847', time: '13:22', route: 'Town → Megenagna', fare: 8 },
-  { id: '5503', time: '12:58', route: 'Megenagna → CMC', fare: 10 },
-  { id: '9124', time: '12:34', route: 'Town → Megenagna', fare: 8 },
-];
-
 const TransactionHistoryScreen = () => {
+  const [loading, setLoading] = useState(true);
+  const [dailyTotal, setDailyTotal] = useState({ amount: '0.00', trips: 0 });
+  const [transactions, setTransactions] = useState<FareTransaction[]>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      const [summary, txList] = await Promise.all([
+        getDriverSummary(driverId),
+        getDriverTransactions(driverId),
+      ]);
+
+      if (summary) {
+        setDailyTotal({ amount: summary.total, trips: summary.trips });
+      }
+      if (txList) {
+        setTransactions(txList);
+      }
+      setLoading(false);
+    };
+
+    load();
+  }, []);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
@@ -47,9 +62,7 @@ const TransactionHistoryScreen = () => {
           <Text style={styles.totalLabel}>Daily total</Text>
           <View style={styles.totalAmountRow}>
             <Text style={styles.totalCurrency}>ETB</Text>
-            <Text style={styles.totalAmount}>
-              {dailyTotal.amount.toFixed(2)}
-            </Text>
+            <Text style={styles.totalAmount}>{dailyTotal.amount}</Text>
           </View>
         </View>
         <View style={styles.tripsBox}>
@@ -58,22 +71,32 @@ const TransactionHistoryScreen = () => {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.listContent}>
-        {transactions.map(tx => (
-          <View key={tx.id} style={styles.txRow}>
-            <View style={styles.timeBox}>
-              <Text style={styles.timeText}>{tx.time}</Text>
-            </View>
+      {loading ? (
+        <ActivityIndicator
+          size="large"
+          color={colors.teal}
+          style={{ marginTop: 40 }}
+        />
+      ) : transactions.length === 0 ? (
+        <Text style={styles.emptyText}>No fares collected yet today</Text>
+      ) : (
+        <ScrollView contentContainerStyle={styles.listContent}>
+          {transactions.map(tx => (
+            <View key={`${tx.id}-${tx.time}`} style={styles.txRow}>
+              <View style={styles.timeBox}>
+                <Text style={styles.timeText}>{tx.time}</Text>
+              </View>
 
-            <View style={styles.txDetails}>
-              <Text style={styles.txId}>•• {tx.id}</Text>
-              <Text style={styles.txRoute}>{tx.route}</Text>
-            </View>
+              <View style={styles.txDetails}>
+                <Text style={styles.txId}>•• {tx.id}</Text>
+                <Text style={styles.txRoute}>{tx.route}</Text>
+              </View>
 
-            <Text style={styles.txFare}>ETB {tx.fare}</Text>
-          </View>
-        ))}
-      </ScrollView>
+              <Text style={styles.txFare}>ETB {tx.fare}</Text>
+            </View>
+          ))}
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 };
@@ -156,6 +179,12 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: 20,
     paddingBottom: 24,
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: colors.textSecondary,
+    fontSize: 14,
+    marginTop: 40,
   },
   txRow: {
     flexDirection: 'row',

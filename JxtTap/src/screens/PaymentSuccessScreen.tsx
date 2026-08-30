@@ -9,15 +9,12 @@ import {
 import { colors } from '../theme/colors';
 
 const PaymentSuccessScreen = ({ navigation, route }: any) => {
-  const cardId = route?.params?.cardId ?? '4821';
-
-  // Fare and balance are still mock — will come from backend in Step 12
-  const payment = {
-    fare: 8.0,
-    cardId: cardId,
-    routeStage: 'Town → Megenagna',
-    remainingBalance: 42.5,
-  };
+  const {
+    fare = '0.00',
+    cardId = '----',
+    routeStage = '',
+    remainingBalance = '0.00',
+  } = route?.params ?? {};
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -30,30 +27,28 @@ const PaymentSuccessScreen = ({ navigation, route }: any) => {
 
         <View style={styles.amountRow}>
           <Text style={styles.currency}>ETB</Text>
-          <Text style={styles.amount}>{payment.fare.toFixed(2)}</Text>
+          <Text style={styles.amount}>{fare}</Text>
         </View>
       </View>
 
       <View style={styles.detailsCard}>
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Card</Text>
-          <Text style={styles.detailValue}>•••• •••• {payment.cardId}</Text>
+          <Text style={styles.detailValue}>•••• •••• {cardId}</Text>
         </View>
 
         <View style={styles.divider} />
 
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Route stage</Text>
-          <Text style={styles.detailValueDark}>{payment.routeStage}</Text>
+          <Text style={styles.detailValueDark}>{routeStage}</Text>
         </View>
 
         <View style={styles.divider} />
 
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Remaining balance</Text>
-          <Text style={styles.detailValueTeal}>
-            ETB {payment.remainingBalance.toFixed(2)}
-          </Text>
+          <Text style={styles.detailValueTeal}>ETB {remainingBalance}</Text>
         </View>
       </View>
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,26 +8,26 @@ import {
   SafeAreaView,
   Animated,
   Alert,
+  Modal,
+  FlatList,
 } from 'react-native';
 import { colors } from '../theme/colors';
 import { readCardOnce } from '../services/NfcService';
+import {
+  processTransaction,
+  getDriverSummary,
+  getDriverInfo,
+  getRouteLegs,
+  setCurrentLeg,
+  RouteLeg,
+} from '../services/ApiService';
+import { queueTransaction } from '../services/OfflineDb';
+import { syncQueuedTransactions } from '../services/OfflineSync';
 
-// Mock data for now — will be replaced with real API data in Step 12
 const driver = {
+  id: 1, // matches the seeded test driver
   name: 'Tadesse Girma',
-  route: 'Route 23 · Town – Addis Ababa',
 };
-
-const todayStats = {
-  total: 82.0,
-  trips: 8,
-};
-
-const recentFares = [
-  { id: '4821', route: 'Town → Megenagna', time: '14:32', fare: 8 },
-  { id: '2934', route: 'Town → Megenagna', time: '14:18', fare: 8 },
-  { id: '7761', route: 'Megenagna → CMC', time: '13:55', fare: 10 },
-];
 
 const getGreeting = () => {
   const hour = new Date().getHours();
@@ -38,6 +38,47 @@ const getGreeting = () => {
 
 const HomeScreen = ({ navigation }: any) => {
   const pulse = useRef(new Animated.Value(0)).current;
+  const [todayStats, setTodayStats] = useState({ total: '0.00', trips: 0 });
+  const [routeName, setRouteName] = useState('');
+  const [currentLeg, setCurrentLegLabel] = useState('Not set');
+  const [routeId, setRouteId] = useState<number | null>(null);
+  const [legs, setLegs] = useState<RouteLeg[]>([]);
+  const [pickerVisible, setPickerVisible] = useState(false);
+
+  const loadSummary = async () => {
+    const summary = await getDriverSummary(driver.id);
+    if (summary) {
+      setTodayStats({ total: summary.total, trips: summary.trips });
+    }
+  };
+
+  const loadDriverInfo = async () => {
+    const info = await getDriverInfo(driver.id);
+    if (info) {
+      setRouteName(info.routeName ?? '');
+      setCurrentLegLabel(info.currentLeg ?? 'Not set');
+      setRouteId(info.routeId);
+    }
+  };
+
+  useEffect(() => {
+    const runSync = async () => {
+      const { synced } = await syncQueuedTransactions();
+      if (synced > 0) {
+        Alert.alert(
+          'Synced',
+          `${synced} offline fare${synced > 1 ? 's' : ''} synced successfully.`,
+        );
+      }
+      loadSummary();
+      loadDriverInfo();
+    };
+
+    runSync();
+
+    const unsubscribe = navigation.addListener('focus', runSync);
+    return unsubscribe;
+  }, [navigation]);
 
   useEffect(() => {
     const loop = Animated.loop(
@@ -68,17 +109,85 @@ const HomeScreen = ({ navigation }: any) => {
     outputRange: [0.35, 0],
   });
 
-  return (
+  const openLegPicker = async () => {
+    if (!routeId) return;
+    const availableLegs = await getRouteLegs(routeId);
+    if (availableLegs) {
+      setLegs(availableLegs);
+      setPickerVisible(true);
+    }
+  };
+
+  const handleSelectLeg = async (leg: RouteLeg) => {
+    const success = await setCurrentLeg(
+      driver.id,
+      leg.fromStopId,
+      leg.toStopId,
+    );
+    if (success) {
+      setCurrentLegLabel(leg.label);
+    } else {
+      Alert.alert('Could not update', 'Try again in a moment');
+    }
+    setPickerVisible(false);
+  };
+
+  const handleScan = async () => {
+    const cardId = await readCardOnce();
+
+    if (!cardId) {
+      Alert.alert('No card detected', 'Try tapping again');
+      return;
+    }
+
+    const result = await processTransaction(cardId, driver.id);
+
+    if (!result) {
+      // No connection — queue this tap locally instead of failing outright
+      await queueTransaction(cardId, driver.id);
+      Alert.alert(
+        'Saved offline',
+        "No connection right now. This fare will sync automatically once you're back online.",
+      );
+      return;
+    }
+
+    if (result.success) {
+      navigation.navigate('PaymentSuccess', {
+        fare: result.fare,
+        cardId: result.cardUid,
+        routeStage: result.routeStage,
+        remainingBalance: result.remainingBalance,
+      });
+    } else {
+      navigation.navigate('PaymentFailed', {
+        cardBalance: result.cardBalance,
+        fare: result.fare,
+        cardId: result.cardUid,
+      });
+    }
+  };
+
+  const totalParts = todayStats.total.split('.');
+    return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.greeting}>{getGreeting()}</Text>
           <Text style={styles.driverName}>{driver.name}</Text>
-          <View style={styles.routeBadge}>
+
+          <TouchableOpacity
+            style={styles.routeBadge}
+            onPress={openLegPicker}
+            activeOpacity={0.7}
+          >
             <View style={styles.routeDot} />
-            <Text style={styles.routeText}>{driver.route}</Text>
-          </View>
+            <Text style={styles.routeText}>
+              {routeName ? `${routeName} · ${currentLeg}` : 'Loading...'}
+            </Text>
+            <Text style={styles.changeHint}>Change</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Today's total card */}
@@ -88,10 +197,8 @@ const HomeScreen = ({ navigation }: any) => {
             <View style={styles.amountRow}>
               <Text style={styles.currency}>ETB</Text>
               <Text style={styles.amount}>
-                {todayStats.total.toFixed(2).split('.')[0]}
-                <Text style={styles.amountDecimal}>
-                  .{todayStats.total.toFixed(2).split('.')[1]}
-                </Text>
+                {totalParts[0]}
+                <Text style={styles.amountDecimal}>.{totalParts[1]}</Text>
               </Text>
             </View>
             <View style={styles.tripsBox}>
@@ -116,15 +223,7 @@ const HomeScreen = ({ navigation }: any) => {
             <TouchableOpacity
               style={styles.scanIconBox}
               activeOpacity={0.85}
-              onPress={async () => {
-                const cardId = await readCardOnce();
-
-                if (cardId) {
-                  navigation.navigate('PaymentSuccess', { cardId });
-                } else {
-                  Alert.alert('No card detected', 'Try tapping again');
-                }
-              }}
+              onPress={handleScan}
             >
               <View style={styles.viewfinder}>
                 <View style={[styles.corner, styles.cornerTL]} />
@@ -148,26 +247,42 @@ const HomeScreen = ({ navigation }: any) => {
               <Text style={styles.seeAll}>See all</Text>
             </TouchableOpacity>
           </View>
-
-          {recentFares.map((fare, index) => (
-            <View
-              key={fare.id}
-              style={[
-                styles.fareRow,
-                index === recentFares.length - 1 && styles.fareRowLast,
-              ]}
-            >
-              <View>
-                <Text style={styles.fareId}>•••• {fare.id}</Text>
-                <Text style={styles.fareRoute}>
-                  {fare.route} · {fare.time}
-                </Text>
-              </View>
-              <Text style={styles.fareAmount}>ETB {fare.fare}</Text>
-            </View>
-          ))}
+          <Text style={styles.seeAllHint}>
+            Tap "See all" to view today's fares
+          </Text>
         </View>
       </ScrollView>
+
+      {/* Leg picker modal */}
+      <Modal
+        visible={pickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPickerVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setPickerVisible(false)}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select current stage</Text>
+            <FlatList
+              data={legs}
+              keyExtractor={item => `${item.fromStopId}-${item.toStopId}`}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.legRow}
+                  onPress={() => handleSelectLeg(item)}
+                >
+                  <Text style={styles.legLabel}>{item.label}</Text>
+                  <Text style={styles.legFare}>ETB {item.fare}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -218,6 +333,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.white,
     fontWeight: '500',
+  },
+  changeHint: {
+    fontSize: 11,
+    color: colors.orange,
+    fontWeight: '700',
+    marginLeft: 8,
+    textDecorationLine: 'underline',
   },
   summaryCard: {
     backgroundColor: colors.white,
@@ -357,12 +479,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingHorizontal: 20,
     paddingTop: 16,
+    paddingBottom: 20,
   },
   faresHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
   },
   faresTitle: {
     fontSize: 17,
@@ -374,29 +496,46 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.teal,
   },
-  fareRow: {
+  seeAllHint: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 32,
+    maxHeight: '60%',
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 12,
+  },
+  legRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  fareRowLast: {
-    borderBottomWidth: 0,
-  },
-  fareId: {
+  legLabel: {
     fontSize: 15,
     fontWeight: '600',
     color: colors.textPrimary,
-    marginBottom: 2,
   },
-  fareRoute: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  fareAmount: {
-    fontSize: 16,
+  legFare: {
+    fontSize: 15,
     fontWeight: '700',
     color: colors.teal,
   },
