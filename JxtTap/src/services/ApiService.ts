@@ -1,5 +1,4 @@
-// Replace with your computer's local IP whenever it changes (e.g. new WiFi network)
-const BASE_URL = 'http://10.81.212.13:3000';
+const BASE_URL = 'https://jxt-tap.onrender.com';
 
 export type TransactionResult =
   | {
